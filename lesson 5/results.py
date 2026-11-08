@@ -163,6 +163,7 @@ def _compute_diagnostics(
         "funnel_first_sd": first_sd,
         "funnel_last_sd": last_sd,
         "funnel_ratio": ratio,
+        "top_decile_mean_residual": float(deciles["residual_mean"].iloc[-1]),
         "cheapest_rmse": float(cheapest.iloc[0]),
         "most_expensive_rmse": float(cheapest.iloc[-1]),
         "impossible_count": int(impossible.sum()),
@@ -173,6 +174,7 @@ def _compute_diagnostics(
     return summary, {
         "deciles": deciles, "funnel": funnel, "by_price": by_price,
         "by_age": by_age, "by_zip": by_zip,
+        "plot_data": data[["lat", "long", "age", "y", "p", "residual"]].copy(),
     }
 
 
@@ -201,35 +203,53 @@ def _cluster_counts(cluster_count: int, B: int, seed: int) -> np.ndarray:
 
 
 def _bootstrap_final_stats(
-    frame: pd.DataFrame, B: int = 2000, seed: int = 2026
-) -> dict[str, list[float]]:
+    frame: pd.DataFrame,
+    comparisons: dict[str, str],
+    B: int = 2000,
+    seed: int = 2026,
+) -> dict[str, Any]:
     actual = frame["y"].to_numpy()
     winner = frame["winner"].to_numpy()
-    base = frame["xgb_base"].to_numpy()
-    fair_new = frame["fair_new"].to_numpy()
-    summaries = pd.DataFrame({
+    summary_data = {
         "prop": frame["prop"].to_numpy(),
         "n": np.ones(len(frame), dtype=float),
         "y_abs": np.abs(actual),
         "winner_sse": (actual - winner) ** 2,
-        "base_sse": (actual - base) ** 2,
-        "fair_sse": (actual - fair_new) ** 2,
         "winner_abs_error": np.abs(actual - winner),
-    }).groupby("prop", sort=False).sum()
+    }
+    for prediction_column in comparisons.values():
+        prediction = frame[prediction_column].to_numpy()
+        summary_data[f"{prediction_column}_sse"] = (actual - prediction) ** 2
+        summary_data[f"{prediction_column}_abs_error"] = np.abs(actual - prediction)
+    summaries = pd.DataFrame(summary_data).groupby("prop", sort=False).sum()
     counts = _cluster_counts(len(summaries), B, seed)
     sampled_n = counts @ summaries["n"].to_numpy()
+    denominator = counts @ summaries["y_abs"].to_numpy()
     winner_rmse = np.sqrt((counts @ summaries["winner_sse"].to_numpy()) / sampled_n)
-    base_rmse = np.sqrt((counts @ summaries["base_sse"].to_numpy()) / sampled_n)
-    fair_rmse = np.sqrt((counts @ summaries["fair_sse"].to_numpy()) / sampled_n)
     winner_wape = (
         counts @ summaries["winner_abs_error"].to_numpy()
-    ) / (counts @ summaries["y_abs"].to_numpy())
-    return {
+    ) / denominator
+    result: dict[str, Any] = {
         "rmse": np.quantile(winner_rmse, [0.025, 0.975]).tolist(),
         "wape": np.quantile(winner_wape, [0.025, 0.975]).tolist(),
-        "rmse_vs_xgb_base": np.quantile(base_rmse - winner_rmse, [0.025, 0.975]).tolist(),
-        "rmse_vs_lr_fair_new": np.quantile(fair_rmse - winner_rmse, [0.025, 0.975]).tolist(),
+        "comparisons": {},
     }
+    for label, prediction_column in comparisons.items():
+        comparison_rmse = np.sqrt(
+            (counts @ summaries[f"{prediction_column}_sse"].to_numpy()) / sampled_n
+        )
+        comparison_wape = (
+            counts @ summaries[f"{prediction_column}_abs_error"].to_numpy()
+        ) / denominator
+        result["comparisons"][label] = {
+            "rmse_difference": np.quantile(
+                comparison_rmse - winner_rmse, [0.025, 0.975]
+            ).tolist(),
+            "wape_difference": np.quantile(
+                comparison_wape - winner_wape, [0.025, 0.975]
+            ).tolist(),
+        }
+    return result
 
 
 def _drift(
@@ -351,7 +371,7 @@ def compute() -> tuple[dict[str, Any], dict[str, Any]]:
         }
     common = chronological.loc[chronological["idx"].isin(chronological_rows)]
     R["split_comparison"] = {
-        "chronological": {"rmse": H.metrics(common["y"], common["p"])["rmse"], "rows": len(common)},
+        "chronological": {**H.metrics(common["y"], common["p"]), "rows": len(common)},
         **random_results,
     }
 
@@ -390,17 +410,32 @@ def compute() -> tuple[dict[str, Any], dict[str, Any]]:
     R["log_target"] = {"log1p": log_metrics, "raw": raw_metrics}
     O["raw_target"] = raw_oof
 
-    leaky = H.comps_leaky(frame)
-    leaky_frame = frame.copy()
-    leaky_frame["leaky_ppsf"] = leaky["comps_ppsf"]
-    leaky_frame["leaky_price"] = leaky["comps_price"]
-    leaky_spec = H.xgb(_combined(["leaky_ppsf", "leaky_price"]))
-    leaky_oof = H.oof(leaky_spec, leaky_frame, 0)
-    R["leaky"] = {
-        **H.metrics(leaky_oof["y"], leaky_oof["p"]),
-        "fold_rmse": H.fold_metric(leaky_oof, "rmse"),
+    leaky_k3 = H.comps_leaky(dev, k=3)
+    leaky_frame = dev.copy()
+    leaky_frame["leaky_k3_ppsf"] = leaky_k3["comps_ppsf"]
+    leaky_frame["leaky_k3_price"] = leaky_k3["comps_price"]
+    zip_ppsf = (dev["price"] / dev["sqft_living"].clip(lower=1)).groupby(
+        dev["zipcode"]
+    ).transform("mean")
+    leaky_frame["leaky_zip_ppsf"] = zip_ppsf.to_numpy()
+    leaky_frame["leaky_zip_price"] = (
+        leaky_frame["leaky_zip_ppsf"] * leaky_frame["sqft_living"]
+    )
+    correct_comps_oof = cached(H.xgb(_combined(H.COMPS)))
+    leaky_oofs = {
+        "xgb BASE": O["ladder"]["xgb"],
+        "BASE + leaky k=3 comps": H.oof(
+            H.xgb(_combined(["leaky_k3_ppsf", "leaky_k3_price"])), leaky_frame, 0
+        ),
+        "BASE + leaky ZIP átlag": H.oof(
+            H.xgb(_combined(["leaky_zip_ppsf", "leaky_zip_price"])), leaky_frame, 0
+        ),
+        "BASE + helyes fold-comps": correct_comps_oof,
     }
-    O["leaky"] = leaky_oof
+    R["leaky"] = pd.DataFrame([
+        _metric_row(name, predictions) for name, predictions in leaky_oofs.items()
+    ])
+    O["leaky"] = leaky_oofs
 
     base_seeds = [O["ladder"]["xgb"], cached(H.xgb(), 1), cached(H.xgb(), 2)]
     ablation_oofs: dict[str, list[pd.DataFrame]] = {"BASE": base_seeds}
@@ -555,7 +590,7 @@ def compute() -> tuple[dict[str, Any], dict[str, Any]]:
     chosen = min(final_candidates, key=lambda item: item["fold_rmse"])
     R["final_rule"] = {
         "rule": "A jelöltek közül a legkisebb fejlesztési fold-átlagos RMSE választ; tesztadat nem vesz részt a döntésben.",
-        "metric_reason": "Az RMSE a nagy dollárhibákat bünteti, összhangban az előre rögzített túlbecslési kockázattal; a WAPE arányos főmutató marad.",
+        "metric_reason": "Az RMSE az elsődleges és modellválasztási mutató dollárban, mert a nagy hibákat erősen bünteti; a WAPE, MAE, RMSLE, R² és az összegarány másodlagos ellenőrző mutatók.",
         "chosen": chosen["név"],
         "chosen_fold_rmse": chosen["fold_rmse"],
         "candidates": [
@@ -571,22 +606,21 @@ def compute() -> tuple[dict[str, Any], dict[str, Any]]:
         "ZIP-medián": H.Spec("ZIP-medián", "zip_median", ()),
         "lr_fair": H.lr_fair(),
         "xgb BASE": H.xgb(),
-        "lr_fair + új jellemzők": fair_new_spec,
-        "Kiválasztott": chosen["spec"],
     }
-    final_predictions = {}
-    for name, spec in final_specs.items():
-        if name == "Kiválasztott" and chosen["név"] == "lr_fair":
-            final_predictions[name] = final_predictions["lr_fair"]
-        elif name == "Kiválasztott" and chosen["név"] == "lr_fair + új jellemzők":
-            final_predictions[name] = final_predictions["lr_fair + új jellemzők"]
-        else:
-            final_predictions[name] = H.fit_predict(spec, final_train, test, 0)
+    final_predictions = {
+        name: H.fit_predict(spec, final_train, test, 0)
+        for name, spec in final_specs.items()
+    }
+    if chosen["név"] in final_predictions:
+        final_predictions["Kiválasztott"] = final_predictions[chosen["név"]]
+    else:
+        final_predictions["Kiválasztott"] = H.fit_predict(
+            chosen["spec"], final_train, test, 0
+        )
     R["final"] = {
         "metrics": [
             {"modell": name, **H.metrics(test["price"], prediction)}
             for name, prediction in final_predictions.items()
-            if name != "lr_fair + új jellemzők"
         ],
         "bootstrap": {},
     }
@@ -594,21 +628,16 @@ def compute() -> tuple[dict[str, Any], dict[str, Any]]:
         "prop": test["prop"].to_numpy(),
         "y": test["price"].to_numpy(),
         "winner": final_predictions["Kiválasztott"],
+        "naive": final_predictions["ZIP-medián"],
+        "lr_fair": final_predictions["lr_fair"],
         "xgb_base": final_predictions["xgb BASE"],
-        "fair_new": final_predictions["lr_fair + új jellemzők"],
     })
-    R["final"]["bootstrap"] = _bootstrap_final_stats(bootstrap_frame, B=2000, seed=2026)
-
-    def winner_wape(sample: pd.DataFrame) -> float:
-        error = sample["y"].to_numpy() - sample["winner"].to_numpy()
-        return float(np.abs(error).sum() / np.abs(sample["y"].to_numpy()).sum())
-
-    generic_wape_bootstrap = H.group_bootstrap(
-        bootstrap_frame, winner_wape, B=2000, seed=2026
+    R["final"]["bootstrap"] = _bootstrap_final_stats(
+        bootstrap_frame,
+        {"ZIP-medián": "naive", "lr_fair": "lr_fair", "xgb BASE": "xgb_base"},
+        B=2000,
+        seed=2026,
     )
-    R["final"]["bootstrap"]["wape"] = np.quantile(
-        generic_wape_bootstrap, [0.025, 0.975]
-    ).tolist()
     R["uncertainty"] = _quantile_final(final_train, test, H.xgb(), 0)
     O["final_predictions"] = pd.DataFrame({
         "y": test["price"].to_numpy(),
