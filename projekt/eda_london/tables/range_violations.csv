@@ -1,0 +1,7 @@
+﻿variable,rule,violations,share
+humidity,Expected range 0–100%,0,0.0
+cloud_cover,Expected range 0–100%,0,0.0
+min_temp <= max_temp,Minimum exceeds maximum,0,0.0
+rain,Negative rainfall,0,0.0
+wind_speed,Negative wind speed,0,0.0
+wind_direction_numerical,"Expected degrees in [0, 360)",0,0.0

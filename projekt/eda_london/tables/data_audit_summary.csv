@@ -1,0 +1,8 @@
+﻿check,value
+Rows,20440
+Locations,8
+Date start,2017-01-01
+Date end,2023-12-31
+Exact duplicate rows,0
+"Duplicate (location, date) pairs",0
+Missing values (all columns),0

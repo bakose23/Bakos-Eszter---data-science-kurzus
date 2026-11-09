@@ -1,0 +1,2 @@
+﻿rainy_day_threshold_mm,share_days_rain_ge_0_1,share_days_rain_ge_1,share_days_rain_ge_5,share_days_rain_ge_10,mean_rain_on_days_ge_1_mm,median_rain_on_days_ge_1_mm,zero_rain_share
+1.0,0.5686,0.3658,0.1451,0.0525,5.5869,3.9,0.4314

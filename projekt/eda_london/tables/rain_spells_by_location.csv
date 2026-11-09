@@ -1,0 +1,17 @@
+﻿location,spell,threshold_mm,longest_consecutive_days,start,end
+Barnehurst,dry_lt_1mm,1.0,40,2018-06-17,2018-07-26
+Barnehurst,wet_ge_1mm,1.0,11,2019-12-12,2019-12-22
+Barnsbury,dry_lt_1mm,1.0,34,2020-05-02,2020-06-04
+Barnsbury,wet_ge_1mm,1.0,11,2019-12-12,2019-12-22
+Bexleyheath,dry_lt_1mm,1.0,34,2020-05-02,2020-06-04
+Bexleyheath,wet_ge_1mm,1.0,11,2019-12-12,2019-12-22
+Blackfen,dry_lt_1mm,1.0,34,2020-05-02,2020-06-04
+Blackfen,wet_ge_1mm,1.0,14,2023-10-23,2023-11-05
+Furzedown,dry_lt_1mm,1.0,32,2020-03-16,2020-04-16
+Furzedown,wet_ge_1mm,1.0,14,2023-10-23,2023-11-05
+Knight's Hill,dry_lt_1mm,1.0,34,2020-05-02,2020-06-04
+Knight's Hill,wet_ge_1mm,1.0,11,2019-12-12,2019-12-22
+Lessness Heath,dry_lt_1mm,1.0,40,2018-06-17,2018-07-26
+Lessness Heath,wet_ge_1mm,1.0,11,2019-12-12,2019-12-22
+Park Lane,dry_lt_1mm,1.0,28,2023-01-19,2023-02-15
+Park Lane,wet_ge_1mm,1.0,18,2019-02-28,2019-03-17

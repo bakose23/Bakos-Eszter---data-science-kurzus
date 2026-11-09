@@ -1,0 +1,15 @@
+﻿column,missing_count,missing_share
+location,0,0.0
+date,0,0.0
+min_temp,0,0.0
+max_temp,0,0.0
+rain,0,0.0
+humidity,0,0.0
+cloud_cover,0,0.0
+wind_speed,0,0.0
+wind_direction,0,0.0
+wind_direction_numerical,0,0.0
+year,0,0.0
+month,0,0.0
+month_start,0,0.0
+temp_range,0,0.0
